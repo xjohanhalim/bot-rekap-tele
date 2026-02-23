@@ -1,19 +1,24 @@
-from telegram.ext import Updater, MessageHandler, Filters, CommandHandler
-from collections import defaultdict
-import pandas as pd
 import os
 import re
-import pytesseract
-from PIL import Image
-from datetime import datetime
 import threading
 from flask import Flask
+from collections import defaultdict
+from datetime import datetime
 
-# ================== CONFIG ==================
-pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+import pandas as pd
+from telegram import Update
+from telegram.ext import (
+    ApplicationBuilder,
+    MessageHandler,
+    CommandHandler,
+    ContextTypes,
+    filters,
+)
+
 TOKEN = os.getenv("TOKEN")
 
 # ================== UTIL ==================
+
 def normalisasi_paket(paket):
     paket = str(paket).upper()
     jam = re.search(r'([1-5])\s*JAM', paket)
@@ -65,35 +70,29 @@ def rekap_data(rows):
     return hasil
 
 
-# ================== HANDLER ==================
-def tampilkan_menu_bulan(update, context):
-    sheets = context.user_data["sheets"]
+# ================== HANDLERS ==================
 
-    pesan = "📅 *Pilih bulan laporan:*\n\n"
-    for i, s in enumerate(sheets, start=1):
-        pesan += f"{i}. {s}\n"
-    pesan += "\nKetik nomor bulan (contoh: 1)"
-
-    update.message.reply_text(pesan, parse_mode="Markdown")
-    context.user_data["menunggu_pilih_bulan"] = True
-
-
-def handle_excel(update, context):
-    file = update.message.document.get_file()
-    file.download("data.xlsx")
+async def handle_excel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    file = await update.message.document.get_file()
+    await file.download_to_drive("data.xlsx")
 
     xls = pd.ExcelFile("data.xlsx")
     sheets = xls.sheet_names
     xls.close()
 
     context.user_data.clear()
-    context.user_data["excel_path"] = "data.xlsx"
     context.user_data["sheets"] = sheets
+    context.user_data["menunggu_pilih_bulan"] = True
 
-    tampilkan_menu_bulan(update, context)
+    pesan = "📅 *Pilih bulan laporan:*\n\n"
+    for i, s in enumerate(sheets, start=1):
+        pesan += f"{i}. {s}\n"
+    pesan += "\nKetik nomor bulan (contoh: 1)"
+
+    await update.message.reply_text(pesan, parse_mode="Markdown")
 
 
-def handle_pilih_bulan(update, context):
+async def handle_pilih_bulan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.user_data.get("menunggu_pilih_bulan"):
         return
 
@@ -102,7 +101,7 @@ def handle_pilih_bulan(update, context):
         sheets = context.user_data["sheets"]
         sheet_name = sheets[pilihan - 1]
     except:
-        update.message.reply_text("❌ Pilihan bulan tidak valid.")
+        await update.message.reply_text("❌ Pilihan bulan tidak valid.")
         return
 
     df_raw = pd.read_excel("data.xlsx", sheet_name=sheet_name, header=None)
@@ -119,99 +118,30 @@ def handle_pilih_bulan(update, context):
             break
 
     if header_row is None:
-        update.message.reply_text("❌ Header tabel tidak ditemukan.")
+        await update.message.reply_text("❌ Header tabel tidak ditemukan.")
         return
 
     df = pd.read_excel("data.xlsx", sheet_name=sheet_name, header=header_row)
     df.columns = df.columns.astype(str).str.strip().str.lower()
 
-    col_map = {}
-    for col in df.columns:
-        if "tanggal" in col:
-            col_map["tanggal"] = col
-        elif "lokasi" in col:
-            col_map["lokasi"] = col
-        elif "paket" in col:
-            col_map["paket"] = col
-        elif "jumlah" in col:
-            col_map["jumlah"] = col
-
-    if len(col_map) < 4:
-        update.message.reply_text(
-            f"❌ Kolom tidak lengkap di sheet {sheet_name}.\n"
-            f"Kolom terbaca: {list(df.columns)}"
-        )
-        return
-
-    df = df.dropna(subset=[col_map["tanggal"], col_map["paket"], col_map["jumlah"]])
-
     rows = [
-        (
-            r[col_map["tanggal"]],
-            r[col_map["lokasi"]],
-            r[col_map["paket"]],
-            r[col_map["jumlah"]],
-        )
+        (r["tanggal"], r["lokasi"], r["paket"], r["jumlah"])
         for _, r in df.iterrows()
+        if not pd.isna(r["tanggal"]) and not pd.isna(r["paket"])
     ]
 
     hasil = rekap_data(rows)
 
-    update.message.reply_text(
+    await update.message.reply_text(
         f"📊 *Rekap {sheet_name}*\n\n{hasil}",
         parse_mode="Markdown"
     )
 
-    context.user_data["menunggu_pilih_bulan"] = False
-    context.user_data["menunggu_lanjut"] = True
-
-    update.message.reply_text(
-        "📅 Mau rekap bulan lain?\nKetik: *ya* / *tidak*",
-        parse_mode="Markdown"
-    )
+    context.user_data.clear()
 
 
-def handle_text(update, context):
-    text = update.message.text.lower().strip()
+# ================== FLASK (RENDER FREE) ==================
 
-    if context.user_data.get("menunggu_lanjut"):
-        if text == "ya":
-            context.user_data["menunggu_lanjut"] = False
-            tampilkan_menu_bulan(update, context)
-        elif text == "tidak":
-            context.user_data.clear()
-            update.message.reply_text("✅ Selesai. Terima kasih.")
-        else:
-            update.message.reply_text("Ketik *ya* atau *tidak*.", parse_mode="Markdown")
-
-
-# ================== TELEGRAM BOT ==================
-updater = Updater(
-    TOKEN,
-    use_context=True,
-    request_kwargs={
-        "connect_timeout": 15,
-        "read_timeout": 15
-    }
-)
-
-dp = updater.dispatcher
-dp.add_handler(MessageHandler(
-    Filters.document.mime_type(
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    ),
-    handle_excel
-))
-dp.add_handler(MessageHandler(Filters.text & Filters.regex(r"^\d+$"), handle_pilih_bulan))
-dp.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_text))
-
-try:
-    updater.start_polling(poll_interval=1.0, timeout=30)
-except Exception as e:
-    print("⚠️ Bot berhenti karena error jaringan:", e)
-
-
-# ================== FLASK SERVER (RENDER FREE) ==================
 app = Flask(__name__)
 
 @app.route("/")
@@ -224,4 +154,20 @@ def run_web():
 
 threading.Thread(target=run_web).start()
 
-updater.idle()
+
+# ================== MAIN ==================
+
+app_bot = ApplicationBuilder().token(TOKEN).build()
+
+app_bot.add_handler(
+    MessageHandler(
+        filters.Document.MimeType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
+        handle_excel
+    )
+)
+
+app_bot.add_handler(
+    MessageHandler(filters.TEXT & filters.Regex(r"^\d+$"), handle_pilih_bulan)
+)
+
+app_bot.run_polling()
