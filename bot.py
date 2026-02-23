@@ -181,16 +181,27 @@ async def handle_again_done(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
 
     if query.data == "again":
+
+        # Kalau session sudah habis
+        if "sheets" not in context.user_data:
+            await query.message.reply_text(
+                "⚠️ Session sudah berakhir.\nSilakan kirim ulang file Excel untuk mulai lagi."
+            )
+            return
+
         sheets = context.user_data["sheets"]
+
         keyboard = [
             [InlineKeyboardButton(s, callback_data=f"sheet_{i}")]
             for i, s in enumerate(sheets)
         ]
+
         await query.message.reply_text(
             "📅 Pilih bulan laporan:",
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
-    else:
+
+    elif query.data == "done":
         context.user_data.clear()
         await query.message.reply_text("✅ Selesai. Terima kasih.")
 
