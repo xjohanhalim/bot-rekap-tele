@@ -6,11 +6,12 @@ from collections import defaultdict
 from datetime import datetime
 
 import pandas as pd
-from telegram import Update
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder,
     MessageHandler,
     CommandHandler,
+    CallbackQueryHandler,
     ContextTypes,
     filters,
 )
@@ -82,47 +83,33 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-async def tampilkan_menu_bulan(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    sheets = context.user_data["sheets"]
-
-    pesan = "📅 *Pilih bulan laporan:*\n\n"
-    for i, s in enumerate(sheets, start=1):
-        pesan += f"{i}. {s}\n"
-    pesan += "\nKetik nomor bulan (contoh: 1)"
-
-    context.user_data["menunggu_pilih_bulan"] = True
-    await update.message.reply_text(pesan, parse_mode="Markdown")
-
-
 async def handle_excel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        file = await update.message.document.get_file()
-        await file.download_to_drive("data.xlsx")
+    file = await update.message.document.get_file()
+    await file.download_to_drive("data.xlsx")
 
-        xls = pd.ExcelFile("data.xlsx")
-        sheets = xls.sheet_names
-        xls.close()
+    xls = pd.ExcelFile("data.xlsx")
+    sheets = xls.sheet_names
+    xls.close()
 
-        context.user_data.clear()
-        context.user_data["sheets"] = sheets
+    context.user_data["sheets"] = sheets
 
-        await tampilkan_menu_bulan(update, context)
+    keyboard = [
+        [InlineKeyboardButton(s, callback_data=f"sheet_{i}")]
+        for i, s in enumerate(sheets)
+    ]
 
-    except Exception as e:
-        await update.message.reply_text(f"❌ Gagal membaca file.\n{e}")
+    await update.message.reply_text(
+        "📅 Pilih bulan laporan:",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
 
 
-async def handle_pilih_bulan(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not context.user_data.get("menunggu_pilih_bulan"):
-        return
+async def handle_sheet(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
 
-    try:
-        pilihan = int(update.message.text)
-        sheets = context.user_data["sheets"]
-        sheet_name = sheets[pilihan - 1]
-    except:
-        await update.message.reply_text("❌ Pilihan bulan tidak valid.")
-        return
+    index = int(query.data.split("_")[1])
+    sheet_name = context.user_data["sheets"][index]
 
     df_raw = pd.read_excel("data.xlsx", sheet_name=sheet_name, header=None)
 
@@ -138,7 +125,7 @@ async def handle_pilih_bulan(update: Update, context: ContextTypes.DEFAULT_TYPE)
             break
 
     if header_row is None:
-        await update.message.reply_text("❌ Header tabel tidak ditemukan.")
+        await query.message.reply_text("❌ Header tabel tidak ditemukan.")
         return
 
     df = pd.read_excel("data.xlsx", sheet_name=sheet_name, header=header_row)
@@ -156,7 +143,7 @@ async def handle_pilih_bulan(update: Update, context: ContextTypes.DEFAULT_TYPE)
             col_map["jumlah"] = col
 
     if len(col_map) < 4:
-        await update.message.reply_text(
+        await query.message.reply_text(
             f"❌ Kolom tidak lengkap.\nKolom terbaca: {list(df.columns)}"
         )
         return
@@ -175,36 +162,37 @@ async def handle_pilih_bulan(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     hasil = rekap_data(rows)
 
-    await update.message.reply_text(
+    keyboard = [
+        [
+            InlineKeyboardButton("🔁 Rekap Lagi", callback_data="again"),
+            InlineKeyboardButton("❌ Selesai", callback_data="done"),
+        ]
+    ]
+
+    await query.message.reply_text(
         f"📊 *Rekap {sheet_name}*\n\n{hasil}",
-        parse_mode="Markdown"
-    )
-
-    context.user_data["menunggu_pilih_bulan"] = False
-    context.user_data["menunggu_lanjut"] = True
-
-    await update.message.reply_text(
-        "📅 Mau rekap bulan lain?\nKetik: *ya* / *tidak*",
-        parse_mode="Markdown"
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
 
-async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text.lower().strip()
+async def handle_again_done(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
 
-    if context.user_data.get("menunggu_lanjut"):
-        if text == "ya":
-            context.user_data["menunggu_lanjut"] = False
-            await tampilkan_menu_bulan(update, context)
-        elif text == "tidak":
-            context.user_data.clear()
-            await update.message.reply_text("✅ Selesai. Terima kasih.")
-        else:
-            await update.message.reply_text("Ketik *ya* atau *tidak*.", parse_mode="Markdown")
-
-
-async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
-    print(f"Terjadi error: {context.error}")
+    if query.data == "again":
+        sheets = context.user_data["sheets"]
+        keyboard = [
+            [InlineKeyboardButton(s, callback_data=f"sheet_{i}")]
+            for i, s in enumerate(sheets)
+        ]
+        await query.message.reply_text(
+            "📅 Pilih bulan laporan:",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+    else:
+        context.user_data.clear()
+        await query.message.reply_text("✅ Selesai. Terima kasih.")
 
 
 # ================== FLASK ==================
@@ -237,14 +225,7 @@ app_bot.add_handler(
     )
 )
 
-app_bot.add_handler(
-    MessageHandler(filters.TEXT & filters.Regex(r"^\d+$"), handle_pilih_bulan)
-)
-
-app_bot.add_handler(
-    MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text)
-)
-
-app_bot.add_error_handler(error_handler)
+app_bot.add_handler(CallbackQueryHandler(handle_sheet, pattern=r"^sheet_"))
+app_bot.add_handler(CallbackQueryHandler(handle_again_done, pattern="^(again|done)$"))
 
 app_bot.run_polling()
