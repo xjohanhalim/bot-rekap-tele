@@ -6,6 +6,8 @@ import re
 import pytesseract
 from PIL import Image
 from datetime import datetime
+import threading
+from flask import Flask
 
 # ================== CONFIG ==================
 pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
@@ -183,7 +185,7 @@ def handle_text(update, context):
             update.message.reply_text("Ketik *ya* atau *tidak*.", parse_mode="Markdown")
 
 
-# ================== MAIN ==================
+# ================== TELEGRAM BOT ==================
 updater = Updater(
     TOKEN,
     use_context=True,
@@ -205,6 +207,21 @@ dp.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_text))
 
 try:
     updater.start_polling(poll_interval=1.0, timeout=30)
-    updater.idle()
 except Exception as e:
     print("⚠️ Bot berhenti karena error jaringan:", e)
+
+
+# ================== FLASK SERVER (RENDER FREE) ==================
+app = Flask(__name__)
+
+@app.route("/")
+def home():
+    return "Bot is running!"
+
+def run_web():
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
+
+threading.Thread(target=run_web).start()
+
+updater.idle()
