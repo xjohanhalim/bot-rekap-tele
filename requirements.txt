@@ -1,0 +1,5 @@
+python-telegram-bot==13.15
+pandas
+Pillow
+openpyxl
+flask
