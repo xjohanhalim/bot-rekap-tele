@@ -91,6 +91,7 @@ async def handle_excel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     sheets = xls.sheet_names
     xls.close()
 
+    context.user_data.clear()
     context.user_data["sheets"] = sheets
 
     keyboard = [
@@ -104,12 +105,31 @@ async def handle_excel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+# ================== CALLBACK: PILIH SHEET ==================
+
 async def handle_sheet(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
-    index = int(query.data.split("_")[1])
-    sheet_name = context.user_data["sheets"][index]
+    # 🔐 GUARD CHECK
+    if "sheets" not in context.user_data:
+        await query.message.reply_text(
+            "⚠️ Session sudah berakhir.\nSilakan kirim ulang file Excel."
+        )
+        return
+
+    try:
+        index = int(query.data.split("_")[1])
+        sheets = context.user_data["sheets"]
+
+        if index >= len(sheets):
+            raise IndexError
+
+        sheet_name = sheets[index]
+
+    except:
+        await query.message.reply_text("❌ Pilihan tidak valid.")
+        return
 
     df_raw = pd.read_excel("data.xlsx", sheet_name=sheet_name, header=None)
 
@@ -176,16 +196,18 @@ async def handle_sheet(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+# ================== CALLBACK: AGAIN / DONE ==================
+
 async def handle_again_done(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
     if query.data == "again":
 
-        # Kalau session sudah habis
+        # 🔐 GUARD CHECK
         if "sheets" not in context.user_data:
             await query.message.reply_text(
-                "⚠️ Session sudah berakhir.\nSilakan kirim ulang file Excel untuk mulai lagi."
+                "⚠️ Session sudah berakhir.\nSilakan kirim ulang file Excel."
             )
             return
 
@@ -206,7 +228,7 @@ async def handle_again_done(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_text("✅ Selesai. Terima kasih.")
 
 
-# ================== FLASK ==================
+# ================== FLASK (UNTUK RENDER FREE) ==================
 
 app = Flask(__name__)
 
@@ -239,4 +261,4 @@ app_bot.add_handler(
 app_bot.add_handler(CallbackQueryHandler(handle_sheet, pattern=r"^sheet_"))
 app_bot.add_handler(CallbackQueryHandler(handle_again_done, pattern="^(again|done)$"))
 
-app_bot.run_polling()
+app_bot.run_polling(drop_pending_updates=True)
