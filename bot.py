@@ -11,7 +11,7 @@ from flask import Flask
 
 # ================== CONFIG ==================
 pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
-TOKEN = "8519179823:AAH1LO9PYmLNrUn60n3HQ1tfOUDSMi5o8j4"
+TOKEN = os.getenv("TOKEN")
 
 # ================== UTIL ==================
 def normalisasi_paket(paket):
