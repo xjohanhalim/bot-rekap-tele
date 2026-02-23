@@ -3,3 +3,4 @@ pandas
 Pillow
 openpyxl
 flask
+standard-imghdr
